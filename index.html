@@ -286,10 +286,16 @@
     }
     function alertData(records){ const by={}; records.filter(r=>closedStatus(r)==='N').forEach(r=>{const d=excelDate(field(r,'VENCE CASO'));if(!d)return;const k=dayKey(d);if(!by[k])by[k]=[];by[k].push({id:String(field(r,'Id')||''),responsable:String(field(r,'Responsable')||''),segmento:String(field(r,'SEGMENTO INTERNO')||'').trim()||'Sin segmento'});});return by; }
     function derive(sheets){
-      const raw=sheets['NE CONSULTA']; if(!raw)throw new Error('No se encontró la hoja “NE CONSULTA”.'); const records=toRecords(raw); if(!records.length)throw new Error('La hoja “NE CONSULTA” no tiene registros legibles.'); const info=sheets.INFORME||[]; const c5=(info[4]||[])[2], b2=(info[1]||[])[1], b20=(info[19]||[])[1]; const cutoff=excelDate(c5)||new Date(); const start=excelDate(b2)||new Date(cutoff.getFullYear(),cutoff.getMonth(),1);
+      const raw=sheets['NE CONSULTA']; if(!raw)throw new Error('No se encontró la hoja “NE CONSULTA”.'); const records=toRecords(raw); if(!records.length)throw new Error('La hoja “NE CONSULTA” no tiene registros legibles.'); const info=sheets.INFORME||[],infoNumber=(row,col)=>{const value=(info[row]||[])[col];if(value===undefined||value===null||value==='')return null;const parsed=Number(value);return Number.isFinite(parsed)?parsed:null;}; const c5=(info[4]||[])[2],cutoff=excelDate(c5)||new Date();
       const holidayRows=sheets.FESTIVOS||[];const holidays=new Set(holidayRows.slice(1).map(r=>excelDate(r&&r[0])).filter(Boolean).map(dayKey)); const reportMonth=cutoff.getMonth()+1;
-      const dailyRad=buildDaily(records,()=>true), dailyClosed=buildDaily(records,r=>closedStatus(r)==='S'); const currentRecords=records.filter(r=>monthFromValue(field(r,'MES RAD.'),excelDate(field(r,'Radicado')))===reportMonth); const prev=new Date(cutoff.getFullYear(),cutoff.getMonth()-1,1); const prevRecords=records.filter(r=>{const d=excelDate(field(r,'Radicado'));return d&&d.getFullYear()===prev.getFullYear()&&d.getMonth()===prev.getMonth();}); const calculatedClosed=currentRecords.filter(r=>closedStatus(r)==='S').length,calculatedOpen=records.filter(r=>closedStatus(r)==='N').length; const closedCurrent=calculatedClosed||num((info[14]||[])[1]),open=calculatedOpen||num((info[14]||[])[3]),dailyVariationValue=(info[9]||[])[7],dailyVariation=dailyVariationValue===''||dailyVariationValue===undefined?null:num(dailyVariationValue);
-      return {generatedAt:new Date().toISOString(),cutoff:dayKey(cutoff),holidays:[...holidays],kpis:{radCurrent:currentRecords.length,radPrevious:prevRecords.length,businessDays:countBusiness(start,cutoff,holidays),dailyVariation,closed:closedCurrent,open,openPrevious:num(b20),cutoffLabel:cutoff.toLocaleDateString('es-CO',{weekday:'long',day:'2-digit',month:'long',year:'numeric'})},dailyRad,dailyClosed,segments:segmentData(records,reportMonth),indicator:indicatorData(records,reportMonth),openTable:openData(records),alerts:alertData(records)};
+      const dailyRad=buildDaily(records,()=>true),dailyClosed=buildDaily(records,r=>closedStatus(r)==='S');
+      const kpis={
+        businessDays:infoNumber(4,6),radCurrent:infoNumber(9,1),radPrevious:infoNumber(9,2),monthlyVariation:infoNumber(9,3),dailyAverage:infoNumber(9,6),dailyVariation:infoNumber(9,7),
+        closed:infoNumber(14,1),progress:infoNumber(14,2),open:infoNumber(14,3),openPrevious:infoNumber(19,1),openVariation:infoNumber(19,2),
+        compliance:{premium:{less:infoNumber(14,6),greater:infoNumber(14,7)},pref:{less:infoNumber(17,6),greater:infoNumber(17,7)},standard:{less:infoNumber(20,6),greater:infoNumber(20,7)}},
+        cutoffLabel:cutoff.toLocaleDateString('es-CO',{weekday:'long',day:'2-digit',month:'long',year:'numeric'})
+      };
+      return {generatedAt:new Date().toISOString(),cutoff:dayKey(cutoff),holidays:[...holidays],kpis,dailyRad,dailyClosed,segments:segmentData(records,reportMonth),indicator:indicatorData(records,reportMonth),openTable:openData(records),alerts:alertData(records)};
     }
     function statCard(label,value,detail){return `<article class="kpi"><span class="kpi-label">${esc(label)}</span><strong class="kpi-value">${value}</strong>${detail?`<span class="kpi-detail">${esc(detail)}</span>`:''}</article>`;}
     function dailyTable(data,title){ const header=data.months.map(m=>`<th>${esc(m.label)}</th>`).join(''); const rows=data.days.map(day=>`<tr><td>${String(day).padStart(2,'0')}</td>${data.months.map(m=>{const v=data.cells[m.key][day];return `<td class="${v?'':'blank'}">${v?fmt(v):'—'}</td>`}).join('')}</tr>`).join('');return `<div class="table-wrap"><table class="daily-table"><thead><tr><th>${esc(title)}</th>${header}</tr></thead><tbody>${rows}</tbody><tfoot><tr><td>Total general</td>${data.totals.map(v=>`<td>${fmt(v)}</td>`).join('')}</tr></tfoot></table></div>`; }
@@ -357,11 +363,9 @@
       snapshot=restoreSnapshotTypes(snapshot);
       current={snapshot,person:'__all__',metric:'percentage',alertDate:dayKey(atMidnight(new Date())),calendarMonth:new Date(new Date().getFullYear(),new Date().getMonth(),1)};
       document.body.classList.toggle('snapshot',!!document.getElementById('snapshot-data').textContent.trim());
-      const k=snapshot.kpis,cutoff=new Date(`${snapshot.cutoff}T12:00:00`),previousDay=addDays(cutoff,-1);
-      const variation=k.radPrevious?(k.radCurrent-k.radPrevious)/k.radPrevious:null,progress=k.radCurrent?k.closed/k.radCurrent:0,openVar=k.openPrevious?(k.open-k.openPrevious)/k.openPrevious:null;
+      const k=snapshot.kpis,cutoff=new Date(`${snapshot.cutoff}T12:00:00`),previousDay=addDays(cutoff,-1),showNumber=value=>value===null||value===undefined?'—':fmt(value),showPercent=value=>value===null||value===undefined?'—':pct(value);
       const shortDate=d=>d.toLocaleDateString('es-CO',{day:'2-digit',month:'2-digit',year:'2-digit'});
-      const segmentTotals=snapshot.segments.total.by;
-      const tier=(id,name,limit,css)=>{const data=segmentTotals[id]||{less:0,greater:0,total:0};return `<div class="tier-row">${metricBox(`Casos cerrados < ${limit} días`,pct(data.total?data.less/data.total:0))}${metricBox(`Casos cerrados > ${limit} días`,pct(data.total?data.greater/data.total:0))}<div class="tier-name ${css}">${esc(name)}</div></div>`;};
+      const tier=(id,name,limit,css)=>{const data=k.compliance&&k.compliance[id]||{};return `<div class="tier-row">${metricBox(`Casos cerrados < ${limit} días`,showPercent(data.less))}${metricBox(`Casos cerrados > ${limit} días`,showPercent(data.greater))}<div class="tier-name ${css}">${esc(name)}</div></div>`;};
       app.innerHTML=`
         <header class="topbar">
           <div><p class="eyebrow">Informe diario · mantenimiento de contratos</p><h1>DASHBOARD DIARIO ÁREA MANTENIMIENTO DE CONTRATOS</h1></div>
@@ -371,29 +375,29 @@
           <section class="summary-board" aria-label="Indicadores principales">
             <div class="summary-meta">
               <div class="meta-box"><span>Fecha de corte</span><strong>${shortDate(cutoff)}</strong></div>
-              <div class="meta-box"><span>Días hábiles hasta fecha de corte</span><strong>${fmt(k.businessDays)}</strong></div>
+              <div class="meta-box"><span>Días hábiles hasta fecha de corte</span><strong>${showNumber(k.businessDays)}</strong></div>
             </div>
             <div class="summary-layout">
               <div class="summary-column">
                 <div><p class="group-caption">Radicación mensual</p><div class="metric-grid cols-3">
-                  ${metricBox('Casos radicados (total del mes)',fmt(k.radCurrent))}
-                  ${metricBox('Casos radicados mes anterior',fmt(k.radPrevious),'highlight')}
-                  ${metricBox('% variación con respecto al mes anterior',variation===null?'—':pct(variation))}
+                  ${metricBox('Casos radicados (total del mes)',showNumber(k.radCurrent))}
+                  ${metricBox('Casos radicados mes anterior',showNumber(k.radPrevious),'highlight')}
+                  ${metricBox('% variación con respecto al mes anterior',showPercent(k.monthlyVariation))}
                 </div></div>
                 <div><p class="group-caption">Gestión del mes</p><div class="metric-grid cols-3">
-                  ${metricBox('Casos cerrados mes actual',fmt(k.closed))}
-                  ${metricBox('% avance en la gestión del mes',pct(progress))}
-                  ${metricBox(`Casos abiertos al día ${shortDate(cutoff)}`,fmt(k.open),'alert')}
+                  ${metricBox('Casos cerrados mes actual',showNumber(k.closed))}
+                  ${metricBox('% avance en la gestión del mes',showPercent(k.progress))}
+                  ${metricBox(`Casos abiertos al día ${shortDate(cutoff)}`,showNumber(k.open),'alert')}
                 </div></div>
                 <div><p class="group-caption">Comparativo de casos abiertos</p><div class="metric-grid cols-2">
-                  ${metricBox(`Casos abiertos al día ${shortDate(previousDay)}`,fmt(k.openPrevious),'highlight')}
-                  ${metricBox('% variación de casos abiertos con respecto al día anterior',openVar===null?'—':pct(openVar))}
+                  ${metricBox(`Casos abiertos al día ${shortDate(previousDay)}`,showNumber(k.openPrevious),'highlight')}
+                  ${metricBox('% variación de casos abiertos con respecto al día anterior',showPercent(k.openVariation))}
                 </div></div>
               </div>
               <div class="summary-column">
                 <div><p class="group-caption">Ritmo diario</p><div class="metric-grid cols-2">
-                  ${metricBox('Promedio de casos diarios radicados',fmt(k.businessDays?k.radCurrent/k.businessDays:0))}
-                  ${metricBox('% variación diaria de radicados',k.dailyVariation===null?'—':pct(k.dailyVariation),'highlight')}
+                  ${metricBox('Promedio de casos diarios radicados',showNumber(k.dailyAverage))}
+                  ${metricBox('% variación diaria de radicados',showPercent(k.dailyVariation),'highlight')}
                 </div></div>
                 <div><p class="group-caption">Cumplimiento por segmento</p><div class="tier-grid">
                   ${tier('premium','Premium',2,'premium')}
